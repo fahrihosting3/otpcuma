@@ -148,14 +148,33 @@ function ActiveOrderContent() {
           // Check if already notified for this order (persistent across page refresh)
           const alreadyNotifiedPersistent = wasAlreadyNotified(orderId);
           
-          // DON'T mark transaction as success when OTP arrives
-          // Only update the order with OTP code (doesn't change transaction status)
-          // Transaction status should only be "success" when user clicks "Done" button
+          // AUTO-SUCCESS: When OTP code is received, automatically mark as success
+          // No need for user to click "Selesai" button
           if (!alreadyNotifiedPersistent) {
-            // Only update order with OTP code - don't change transaction status
-            updateOrderOTP(orderId, newStatus.otp_code, "otp_received").catch((err) => {
+            // Update order with OTP code AND mark transaction as success
+            updateOrderOTP(orderId, newStatus.otp_code, "success").catch((err) => {
               console.error("[v0] Failed to update order OTP:", err);
             });
+            
+            // Also update transaction status to success
+            updateTransactionStatus(orderId, "success").catch((err) => {
+              console.error("[v0] Failed to update transaction status:", err);
+            });
+            
+            // Update GitHub database status
+            fetch("/api/orders/pending", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ orderId, status: "success" }),
+            }).catch((err) => {
+              console.error("[v0] Failed to update GitHub DB:", err);
+            });
+            
+            // Remove from active orders
+            removeActiveOrder(orderId);
+            
+            // Update localStorage history status with OTP code
+            updateOrderHistoryStatus(orderId, "success", newStatus.otp_code);
           }
           
           // Send Telegram notification if enabled and not already sent
@@ -463,11 +482,25 @@ function ActiveOrderContent() {
             /\d/.test(otpCode); // Must contain at least one digit
           
           if (isValidOtp) {
-            // Real OTP received - only update order, don't change transaction status
-            // User must click "Selesai" button to mark as success
-            await updateOrderOTP(orderId, otpCode, "otp_received");
+            // Real OTP received - AUTO-SUCCESS: mark as success automatically
+            await updateOrderOTP(orderId, otpCode, "success");
+            await updateTransactionStatus(orderId, "success");
+            
+            // Update GitHub database status
+            try {
+              await fetch("/api/orders/pending", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ orderId, status: "success" }),
+              });
+            } catch (ghErr) {
+              console.error("[v0] Failed to update GitHub DB:", ghErr);
+            }
+            
             markAsNotified(orderId);
-            setNotification(`Kode OTP diterima: ${otpCode}`);
+            removeActiveOrder(orderId);
+            updateOrderHistoryStatus(orderId, "success", otpCode);
+            setNotification(`Kode OTP diterima: ${otpCode} - Order sukses!`);
             return;
           }
         }
