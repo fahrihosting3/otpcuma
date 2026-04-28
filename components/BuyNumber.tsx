@@ -31,7 +31,7 @@ import {
   XCircle,
   Phone,
 } from "lucide-react";
-import { getAdminSettings, createTransaction, updateUserBalanceExternal, createOrderWithProfit, checkAndProcessExpiredOrdersFromDB } from "@/lib/externalDB";
+import { getAdminSettings, createTransaction, updateUserBalanceExternal, createOrderWithProfit, checkAndProcessExpiredOrdersFromDB, getAllOrdersWithProfit } from "@/lib/externalDB";
 import { getCurrentUser, refreshUserData } from "@/lib/auth";
 import { addActiveOrder, addOrderToHistory, getOrderHistory, getOrderHistoryStats, type OrderHistory } from "@/lib/orders";
 import { toast } from "sonner";
@@ -179,7 +179,7 @@ export default function BuyNumber() {
     }
   };
 
-  // Fetch order history from GitHub DB (cross-device sync) AND localStorage
+  // Fetch order history from all sources (same as /history page)
   const fetchOrderHistory = async (email: string) => {
     const ordersMap = new Map<string, OrderHistory>();
     
@@ -211,8 +211,38 @@ export default function BuyNumber() {
     } catch {
       // Silently fail
     }
+
+    // 2. Fetch from external API (same as /history page)
+    try {
+      const extRes = await getAllOrdersWithProfit();
+      if (extRes.success && extRes.data) {
+        const userOrders = extRes.data.filter((o: any) => o.userEmail === email);
+        for (const order of userOrders) {
+          const existing = ordersMap.get(order.orderId);
+          if (!existing) {
+            ordersMap.set(order.orderId, {
+              orderId: order.orderId,
+              userEmail: order.userEmail,
+              serviceName: order.serviceName || "OTP Service",
+              countryName: order.countryName || "-",
+              phoneNumber: order.phoneNumber,
+              originalPrice: order.originalPrice || 0,
+              sellingPrice: order.sellingPrice || 0,
+              otpCode: order.otpCode || "-",
+              status: order.status,
+              createdAt: order.createdAt,
+              expiredAt: order.expiredAt || 0,
+            });
+          } else if (order.otpCode && order.otpCode !== "-" && (!existing.otpCode || existing.otpCode === "-")) {
+            ordersMap.set(order.orderId, { ...existing, otpCode: order.otpCode, status: order.status });
+          }
+        }
+      }
+    } catch {
+      // Silently fail
+    }
     
-    // 2. Also get from localStorage and merge
+    // 3. Also get from localStorage and merge
     try {
       const localHistory = getOrderHistory(email);
       for (const order of localHistory) {
@@ -220,7 +250,6 @@ export default function BuyNumber() {
         if (!existing) {
           ordersMap.set(order.orderId, order);
         } else if (order.otpCode && order.otpCode !== "-" && (!existing.otpCode || existing.otpCode === "-")) {
-          // Update with OTP from localStorage if available
           ordersMap.set(order.orderId, { ...existing, otpCode: order.otpCode, status: order.status });
         }
       }
@@ -321,7 +350,10 @@ export default function BuyNumber() {
   const refreshPending = async () => {
     if (userEmail) {
       setLoadingOrders(true);
-      await fetchPendingOrders(userEmail);
+      await Promise.all([
+        fetchPendingOrders(userEmail),
+        fetchOrderHistory(userEmail),
+      ]);
       toast.success("Pesanan diperbarui");
     }
   };
