@@ -172,11 +172,77 @@ export default function BuyNumber() {
         const validOrders = result.data.filter((o: PendingOrderData) => o.status === "pending" && o.expiredAt > now);
         setActiveOrders(validOrders);
       }
-    } catch (err) {
-      console.error("[v0] Error fetching pending orders:", err);
+    } catch {
+      // Silently fail
     } finally {
       setLoadingOrders(false);
     }
+  };
+
+  // Fetch order history from GitHub DB (cross-device sync) AND localStorage
+  const fetchOrderHistory = async (email: string) => {
+    const ordersMap = new Map<string, OrderHistory>();
+    
+    // 1. Fetch from GitHub DB first (cross-device sync)
+    try {
+      const timestamp = Date.now();
+      const res = await fetch(`/api/orders/history?userEmail=${encodeURIComponent(email)}&_t=${timestamp}`, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-cache" },
+      });
+      const result = await res.json();
+      if (result.success && result.data) {
+        for (const order of result.data) {
+          ordersMap.set(order.orderId, {
+            orderId: order.orderId,
+            userEmail: order.userEmail,
+            serviceName: order.serviceName || "OTP Service",
+            countryName: order.countryName || "-",
+            phoneNumber: order.phoneNumber,
+            originalPrice: order.originalPrice || 0,
+            sellingPrice: order.sellingPrice || 0,
+            otpCode: order.otpCode || "-",
+            status: order.status,
+            createdAt: order.createdAt,
+            expiredAt: order.expiredAt || 0,
+          });
+        }
+      }
+    } catch {
+      // Silently fail
+    }
+    
+    // 2. Also get from localStorage and merge
+    try {
+      const localHistory = getOrderHistory(email);
+      for (const order of localHistory) {
+        const existing = ordersMap.get(order.orderId);
+        if (!existing) {
+          ordersMap.set(order.orderId, order);
+        } else if (order.otpCode && order.otpCode !== "-" && (!existing.otpCode || existing.otpCode === "-")) {
+          // Update with OTP from localStorage if available
+          ordersMap.set(order.orderId, { ...existing, otpCode: order.otpCode, status: order.status });
+        }
+      }
+    } catch {
+      // Silently fail
+    }
+    
+    // Convert to array and sort
+    const allOrders = Array.from(ordersMap.values());
+    allOrders.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    
+    setOrderHistory(allOrders);
+    
+    // Calculate stats
+    const stats = {
+      total: allOrders.length,
+      success: allOrders.filter(o => o.status === "success").length,
+      pending: allOrders.filter(o => o.status === "pending").length,
+      expired: allOrders.filter(o => o.status === "expired").length,
+      cancel: allOrders.filter(o => o.status === "cancel").length,
+    };
+    setOrderStats(stats);
   };
 
   // ===== LOAD USER + ACTIVE ORDERS =====
@@ -189,10 +255,8 @@ export default function BuyNumber() {
       fetchBalance();
       fetchPendingOrders(u.email);
       
-      // Load order history from localStorage
-      const history = getOrderHistory(u.email);
-      setOrderHistory(history);
-      setOrderStats(getOrderHistoryStats(u.email));
+      // Load order history from GitHub DB (cross-device sync) AND localStorage
+      fetchOrderHistory(u.email);
       
       // Check and process expired orders from DATABASE (cross-device compatible)
       if (!expiredCheckDoneRef.current) {
@@ -564,8 +628,7 @@ export default function BuyNumber() {
           
           // Save to GitHub database (cross-device compatible) - IMPORTANT for sync across devices
           try {
-            console.log("[v0] Saving order to GitHub DB...", orderId);
-            const saveRes = await fetch("/api/orders/pending", {
+            await fetch("/api/orders/pending", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -581,19 +644,13 @@ export default function BuyNumber() {
                 profit: profitNumber,
               }),
             });
-            const saveData = await saveRes.json();
-            console.log("[v0] GitHub DB save result:", saveData);
-            if (!saveData.success) {
-              console.error("[v0] GitHub DB save failed:", saveData.error);
-            }
-          } catch (saveErr) {
-            console.error("[v0] Failed to save to GitHub DB:", saveErr);
+          } catch {
+            // Silently fail - order still saved to localStorage
           }
           
-  // Refresh order history and stats
+  // Refresh order history from DB
   if (user?.email) {
-    setOrderHistory(getOrderHistory(user.email));
-    setOrderStats(getOrderHistoryStats(user.email));
+    fetchOrderHistory(user.email);
   }
   
   // Show success popup
@@ -662,19 +719,13 @@ export default function BuyNumber() {
                 profit: 0,
               }),
             });
-            const saveData = await saveRes.json();
-            console.log("[v0] GitHub DB save result (fallback):", saveData);
-            if (!saveData.success) {
-              console.error("[v0] GitHub DB save failed (fallback):", saveData.error);
-            }
-          } catch (saveErr) {
-            console.error("[v0] Failed to save to GitHub DB:", saveErr);
+          } catch {
+            // Silently fail - order still saved to localStorage
           }
   
-  // Refresh order history and stats
+  // Refresh order history from DB
   if (user?.email) {
-    setOrderHistory(getOrderHistory(user.email));
-    setOrderStats(getOrderHistoryStats(user.email));
+    fetchOrderHistory(user.email);
   }
   
   setShowSuccessPopup(true);

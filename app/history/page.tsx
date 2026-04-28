@@ -89,10 +89,12 @@ export default function HistoryPage() {
 
       // 1. PRIORITY: Fetch from GitHub DB first (cross-device sync)
       try {
-        console.log("[v0] Fetching orders from GitHub DB...");
-        const localRes = await fetch(`/api/orders/history?userEmail=${encodeURIComponent(email)}`);
+        const timestamp = Date.now();
+        const localRes = await fetch(`/api/orders/history?userEmail=${encodeURIComponent(email)}&_t=${timestamp}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache" },
+        });
         const localData = await localRes.json();
-        console.log("[v0] GitHub DB response:", localData);
         if (localData.success && localData.data) {
           for (const order of localData.data) {
             ordersMap.set(order.orderId, {
@@ -110,10 +112,9 @@ export default function HistoryPage() {
               createdAt: order.createdAt,
             });
           }
-          console.log("[v0] Orders from GitHub DB:", ordersMap.size);
         }
       } catch (localErr) {
-        console.error("[v0] GitHub DB API error:", localErr);
+        // Silently fail, will try other sources
       }
 
       // 2. Also fetch from external API and merge
@@ -132,8 +133,8 @@ export default function HistoryPage() {
             }
           }
         }
-      } catch (extErr) {
-        console.error("[v0] External API error:", extErr);
+      } catch {
+        // Silently fail external API
       }
       
       // 3. Also fetch from localStorage (for same-device orders not yet synced)
@@ -161,8 +162,8 @@ export default function HistoryPage() {
             ordersMap.set(order.orderId, { ...existing, otpCode: order.otpCode, status: order.status });
           }
         }
-      } catch (lsErr) {
-        console.error("[v0] LocalStorage error:", lsErr);
+      } catch {
+        // Silently fail localStorage
       }
 
       // Convert map to array and sort by newest first

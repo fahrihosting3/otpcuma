@@ -138,52 +138,63 @@ function ActiveOrderContent() {
         // Check if we got a new OTP code
         if (newStatus.otp_code && newStatus.otp_code !== lastOtpCodeRef.current) {
           lastOtpCodeRef.current = newStatus.otp_code;
-          setNotification(`Kode OTP diterima: ${newStatus.otp_code}`);
           
-          try {
-            const audio = new Audio("/notification.mp3");
-            audio.play().catch(() => {});
-          } catch {}
+          // Check if OTP is REAL (not placeholder like "-", "Menunggu SMS", etc)
+          const isRealOtp = newStatus.otp_code && 
+            newStatus.otp_code !== "-" && 
+            newStatus.otp_code !== "Menunggu SMS" &&
+            newStatus.otp_code.trim() !== "" &&
+            /\d/.test(newStatus.otp_code); // Must contain at least one digit
+          
+          if (isRealOtp) {
+            setNotification(`Kode OTP diterima: ${newStatus.otp_code}`);
+            
+            try {
+              const audio = new Audio("/notification.mp3");
+              audio.play().catch(() => {});
+            } catch {}
 
-          // Check if already notified for this order (persistent across page refresh)
-          const alreadyNotifiedPersistent = wasAlreadyNotified(orderId);
-          
-          // AUTO-SUCCESS: When OTP code is received, automatically mark as success
-          // No need for user to click "Selesai" button
-          if (!alreadyNotifiedPersistent) {
-            // Update order with OTP code AND mark transaction as success
-            updateOrderOTP(orderId, newStatus.otp_code, "success").catch((err) => {
-              console.error("[v0] Failed to update order OTP:", err);
-            });
+            // Check if already notified for this order (persistent across page refresh)
+            const alreadyNotifiedPersistent = wasAlreadyNotified(orderId);
             
-            // Also update transaction status to success
-            updateTransactionStatus(orderId, "success").catch((err) => {
-              console.error("[v0] Failed to update transaction status:", err);
-            });
-            
-            // Update GitHub database status
-            fetch("/api/orders/pending", {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ orderId, status: "success" }),
-            }).catch((err) => {
-              console.error("[v0] Failed to update GitHub DB:", err);
-            });
-            
-            // Remove from active orders
-            removeActiveOrder(orderId);
-            
-            // Update localStorage history status with OTP code
-            updateOrderHistoryStatus(orderId, "success", newStatus.otp_code);
+            // AUTO-SUCCESS: ONLY when REAL OTP code is received, automatically mark as success
+            if (!alreadyNotifiedPersistent) {
+              // Update order with OTP code AND mark transaction as success
+              updateOrderOTP(orderId, newStatus.otp_code, "success").catch((err) => {
+                console.error("[v0] Failed to update order OTP:", err);
+              });
+              
+              // Also update transaction status to success
+              updateTransactionStatus(orderId, "success").catch((err) => {
+                console.error("[v0] Failed to update transaction status:", err);
+              });
+              
+              // Update GitHub database status with OTP code
+              fetch("/api/orders/pending", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ orderId, status: "success", otpCode: newStatus.otp_code }),
+              }).catch((err) => {
+                console.error("[v0] Failed to update GitHub DB:", err);
+              });
+              
+              // Remove from active orders
+              removeActiveOrder(orderId);
+              
+              // Update localStorage history status with OTP code
+              updateOrderHistoryStatus(orderId, "success", newStatus.otp_code);
+            }
           }
           
-          // Send Telegram notification if enabled and not already sent
-          const settings = telegramSettingsRef.current;
-          const currentUser = userRef.current;
-          
-          if (alreadyNotifiedPersistent) {
-            setOtpNotified(true);
-          } else if (settings?.enabled && !otpNotifiedRef.current && currentUser) {
+          // Send Telegram notification if enabled and not already sent (only for real OTP)
+          if (isRealOtp) {
+            const alreadyNotifiedForTelegram = wasAlreadyNotified(orderId);
+            const settings = telegramSettingsRef.current;
+            const currentUser = userRef.current;
+            
+            if (alreadyNotifiedForTelegram) {
+              setOtpNotified(true);
+            } else if (settings?.enabled && !otpNotifiedRef.current && currentUser) {
             const priceNum = Number(price) || 0;
             const origPriceNum = Number(originalPrice) || priceNum;
             const profit = priceNum - origPriceNum;
@@ -211,9 +222,10 @@ function ActiveOrderContent() {
             }).catch((err) => {
               console.error("[v0] Telegram notification error:", err);
             });
-          } else if (!settings && !alreadyNotifiedPersistent) {
-            // Settings not loaded yet, save for later
-            pendingNotificationRef.current = { otp: newStatus.otp_code, status: newStatus };
+            } else if (!settings && !alreadyNotifiedForTelegram) {
+              // Settings not loaded yet, save for later
+              pendingNotificationRef.current = { otp: newStatus.otp_code, status: newStatus };
+            }
           }
         }
 

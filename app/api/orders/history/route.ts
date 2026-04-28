@@ -6,6 +6,10 @@ import { getFile } from "@/lib/githubDB";
 
 const PENDING_ORDERS_FILE = "data/pending_orders.json";
 
+// Disable caching for this route
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 // GET - Ambil semua orders (termasuk yang sudah selesai)
 export async function GET(req: NextRequest) {
   try {
@@ -23,7 +27,16 @@ export async function GET(req: NextRequest) {
     // Sort by newest first
     orders.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-    return NextResponse.json({ success: true, data: orders });
+    // Return with no-cache headers
+    return NextResponse.json(
+      { success: true, data: orders, count: orders.length },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+          "Pragma": "no-cache",
+        },
+      }
+    );
   } catch (error: any) {
     console.error("Error getting order history:", error);
     return NextResponse.json(
