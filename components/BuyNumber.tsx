@@ -562,9 +562,10 @@ export default function BuyNumber() {
             expiredAt: Number(expiredAt),
           });
           
-          // Save to GitHub database (cross-device compatible)
+          // Save to GitHub database (cross-device compatible) - IMPORTANT for sync across devices
           try {
-            await fetch("/api/orders/pending", {
+            console.log("[v0] Saving order to GitHub DB...", orderId);
+            const saveRes = await fetch("/api/orders/pending", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -580,6 +581,11 @@ export default function BuyNumber() {
                 profit: profitNumber,
               }),
             });
+            const saveData = await saveRes.json();
+            console.log("[v0] GitHub DB save result:", saveData);
+            if (!saveData.success) {
+              console.error("[v0] GitHub DB save failed:", saveData.error);
+            }
           } catch (saveErr) {
             console.error("[v0] Failed to save to GitHub DB:", saveErr);
           }
@@ -637,9 +643,10 @@ export default function BuyNumber() {
             expiredAt: Number(expiredAt),
           });
           
-          // Save to GitHub database (cross-device compatible)
+          // Save to GitHub database (cross-device compatible) - IMPORTANT for sync across devices
           try {
-            await fetch("/api/orders/pending", {
+            console.log("[v0] Saving order to GitHub DB (fallback)...", orderId);
+            const saveRes = await fetch("/api/orders/pending", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -655,9 +662,14 @@ export default function BuyNumber() {
                 profit: 0,
               }),
             });
+            const saveData = await saveRes.json();
+            console.log("[v0] GitHub DB save result (fallback):", saveData);
+            if (!saveData.success) {
+              console.error("[v0] GitHub DB save failed (fallback):", saveData.error);
+            }
           } catch (saveErr) {
-  console.error("[v0] Failed to save to GitHub DB:", saveErr);
-  }
+            console.error("[v0] Failed to save to GitHub DB:", saveErr);
+          }
   
   // Refresh order history and stats
   if (user?.email) {

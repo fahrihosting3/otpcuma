@@ -84,55 +84,65 @@ export default function HistoryPage() {
         setFilteredTrx(trxRes.data);
       }
 
-      // Fetch orders from external API first
-      let userOrders: OrderWithProfit[] = [];
-      
+      // Use Map to track orders by orderId with latest data
+      const ordersMap = new Map<string, OrderWithProfit>();
+
+      // 1. PRIORITY: Fetch from GitHub DB first (cross-device sync)
+      try {
+        console.log("[v0] Fetching orders from GitHub DB...");
+        const localRes = await fetch(`/api/orders/history?userEmail=${encodeURIComponent(email)}`);
+        const localData = await localRes.json();
+        console.log("[v0] GitHub DB response:", localData);
+        if (localData.success && localData.data) {
+          for (const order of localData.data) {
+            ordersMap.set(order.orderId, {
+              id: order.orderId,
+              orderId: order.orderId,
+              userEmail: order.userEmail,
+              serviceName: order.serviceName || "OTP Service",
+              countryName: order.countryName || "-",
+              phoneNumber: order.phoneNumber,
+              originalPrice: order.originalPrice || 0,
+              sellingPrice: order.sellingPrice || 0,
+              profit: order.profit || 0,
+              otpCode: order.otpCode,
+              status: order.status,
+              createdAt: order.createdAt,
+            });
+          }
+          console.log("[v0] Orders from GitHub DB:", ordersMap.size);
+        }
+      } catch (localErr) {
+        console.error("[v0] GitHub DB API error:", localErr);
+      }
+
+      // 2. Also fetch from external API and merge
       try {
         const ordersRes = await getAllOrdersWithProfit();
         if (ordersRes.success && ordersRes.data) {
-          userOrders = ordersRes.data.filter((o) => o.userEmail === email);
-        }
-      } catch (extErr) {
-        console.error("External API error, falling back to local:", extErr);
-      }
-
-      // Also fetch from local GitHub DB and merge
-      try {
-        const localRes = await fetch(`/api/orders/history?userEmail=${encodeURIComponent(email)}`);
-        const localData = await localRes.json();
-        if (localData.success && localData.data) {
-          // Merge with external orders, avoiding duplicates
-          const existingIds = new Set(userOrders.map(o => o.orderId));
-          for (const order of localData.data) {
-            if (!existingIds.has(order.orderId)) {
-              userOrders.push({
-                id: order.orderId,
-                orderId: order.orderId,
-                userEmail: order.userEmail,
-                serviceName: order.serviceName,
-                countryName: order.countryName,
-                phoneNumber: order.phoneNumber,
-                originalPrice: order.originalPrice,
-                sellingPrice: order.sellingPrice,
-                profit: order.profit,
-                otpCode: order.otpCode,
-                status: order.status,
-                createdAt: order.createdAt,
-              });
+          const userOrdersFromExt = ordersRes.data.filter((o) => o.userEmail === email);
+          for (const order of userOrdersFromExt) {
+            // Only add if not exists or update if has newer/better data
+            const existing = ordersMap.get(order.orderId);
+            if (!existing) {
+              ordersMap.set(order.orderId, order);
+            } else if (order.otpCode && !existing.otpCode) {
+              // Update with OTP code if available
+              ordersMap.set(order.orderId, { ...existing, otpCode: order.otpCode, status: order.status });
             }
           }
         }
-      } catch (localErr) {
-        console.error("Local API error:", localErr);
+      } catch (extErr) {
+        console.error("[v0] External API error:", extErr);
       }
       
-      // Also fetch from localStorage (most reliable for same-device)
+      // 3. Also fetch from localStorage (for same-device orders not yet synced)
       try {
         const localStorageOrders = getOrderHistory(email);
-        const existingIds = new Set(userOrders.map(o => o.orderId));
         for (const order of localStorageOrders) {
-          if (!existingIds.has(order.orderId)) {
-            userOrders.push({
+          const existing = ordersMap.get(order.orderId);
+          if (!existing) {
+            ordersMap.set(order.orderId, {
               id: order.orderId,
               orderId: order.orderId,
               userEmail: order.userEmail,
@@ -146,14 +156,20 @@ export default function HistoryPage() {
               status: order.status,
               createdAt: order.createdAt,
             });
+          } else if (order.otpCode && !existing.otpCode) {
+            // Update with OTP code from localStorage if available
+            ordersMap.set(order.orderId, { ...existing, otpCode: order.otpCode, status: order.status });
           }
         }
       } catch (lsErr) {
-        console.error("LocalStorage error:", lsErr);
+        console.error("[v0] LocalStorage error:", lsErr);
       }
 
-      // Sort by newest first
+      // Convert map to array and sort by newest first
+      const userOrders = Array.from(ordersMap.values());
       userOrders.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      
+      console.log("[v0] Total orders loaded:", userOrders.length);
       setOrders(userOrders);
       setFilteredOrders(userOrders);
     } catch (err) {
